@@ -381,6 +381,11 @@ function makeEnsureWorker(ctx: EgoContext, cfg: ResolvedConfig, ffmpegManager: F
         const initCfg = JSON.stringify(captureConfig(cfg, ffmpegManager))
         const handle = ctx.subprocess.spawn({
           argv: [process.execPath, WORKER_BIN, initCfg],
+          // dsh >= 0.1.3-alpha.2 validates null bytes on spec.cwd (crash on
+          // undefined) and scrubs the parent env unless `env` is explicit —
+          // pass both so the worker inherits state-dir/XDG/Chrome variables.
+          cwd: process.cwd(),
+          env: { ...process.env },
           stdio: {
             stdin: { data: '' },
             stdout: { maxBytes: 8192 },
@@ -388,7 +393,12 @@ function makeEnsureWorker(ctx: EgoContext, cfg: ResolvedConfig, ffmpegManager: F
           },
           graceMs: 12_000,
         })
-        handle.done.catch(() => null)
+        handle.done.catch((err: unknown) => {
+          // Surface spawn/exit failures instead of swallowing them: a worker
+          // that dies at startup used to leave the watch panel permanently on
+          // its empty state with no diagnosable trace in the host log.
+          console.error('[dsh-ego-browser] cast worker failed:', err)
+        })
         const deadline = Date.now() + 8000
         while (Date.now() < deadline) {
           const ready = await launchedWorkerPort()
@@ -396,7 +406,8 @@ function makeEnsureWorker(ctx: EgoContext, cfg: ResolvedConfig, ffmpegManager: F
           await new Promise((resolve) => setTimeout(resolve, 100))
         }
         return null
-      } catch {
+      } catch (err) {
+        console.error('[dsh-ego-browser] ensureWorker spawn threw:', err)
         return null
       }
     }
